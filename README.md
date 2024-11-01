@@ -1,7 +1,5 @@
 # Kubernetes: Scale to Zero with Karpenter
 
-# Kubernetes: Scale to Zero with Karpenter
-
 This repository contains resources and examples for scaling Kubernetes workloads to zero using Karpenter, an open-source Kubernetes cluster autoscaler. The following resources are included:
 
 - **AWS Configuration**: Terraform code for creating the necessary AWS resources for the cluster and Karpenter.
