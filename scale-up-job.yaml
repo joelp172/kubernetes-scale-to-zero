@@ -1,0 +1,60 @@
+# CronJob to scale up the cluster
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cluster-scaleup
+  namespace: after-hours-scaler
+spec:
+  schedule: "00 06 * * 1-5"
+  timeZone: "Europe/London"
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: cluster-scaleup
+        spec:
+          serviceAccountName: after-hours-scaler
+          restartPolicy: OnFailure
+          # Allow scheduling on Karpenter node
+          tolerations:
+          - key: "usage"
+            operator: "Equal"
+            value: "startup"
+            effect: "NoSchedule"
+          nodeSelector:
+            usage: startup
+          containers:
+          - name: cluster-scaleup
+            image: 123456789012.dkr.ecr.eu-west-2.amazonaws.com/toolbox/kubectl-tools:v1.30.5
+            imagePullPolicy: IfNotPresent
+            command:
+            - /bin/bash
+            - -c
+            - /scripts/scale-script.sh
+            env:
+            - name: SCALING_DIRECTION
+              value: "up"
+            - name: SLACK_WEBHOOK
+              valueFrom:
+                secretKeyRef:
+                  name: slack-webhooks
+                  key: PLATFORM_ALERTS
+            - name: SLACK_PAYLOAD
+              valueFrom:
+                configMapKeyRef:
+                  name: slack-message-template
+                  key: payload
+            - name: CLUSTER_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: cluster-config
+                  key: CLUSTER_NAME
+            volumeMounts:
+            - name: script-volume
+              mountPath: /scripts
+          volumes:
+          - name: script-volume
+            configMap:
+              name: cluster-scaling-script
+              defaultMode: 0755

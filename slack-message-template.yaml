@@ -1,0 +1,42 @@
+# ConfigMap to define the Slack message template
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: slack-message-template
+  namespace: after-hours-scaler
+data:
+  payload: |
+    {
+        "blocks": [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": ":rotating_light: Cluster After Hours Scaling Alert"
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "The *scale TEMPLATE_SCALING_DIRECTION* operation failed at TEMPLATE_DTG"
+                }
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {
+                        "type": "mrkdwn",
+                        "text": "*Cluster:* `TEMPLATE_CLUSTER`"
+                    }
+                ]
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*Error Message:* TEMPLATE_ERROR_MESSAGE"
+                }
+            }
+        ]
+    }

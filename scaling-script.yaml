@@ -1,0 +1,105 @@
+# ConfigMap to store the scaling script
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-scaling-script
+  namespace: after-hours-scaler
+data:
+  scale-script.sh: |
+    #!/bin/bash
+
+    # Function to handle errors
+    handle_error() {
+        local message="$1"
+        send_slack_message "$message"
+        echo "[ERROR] $message"
+        exit 1
+    }
+
+    # Function to send Slack messages
+    send_slack_message() {
+        local message="$1"
+        SLACK_PAYLOAD=$(echo "$SLACK_PAYLOAD" | sed "s/TEMPLATE_ERROR_MESSAGE/$message/")
+        curl -X POST -H 'Content-type: application/json' --data "$SLACK_PAYLOAD" $SLACK_WEBHOOK
+    }
+
+    # Check if aws cli and kubectl tools are installed
+    command -v kubectl &> /dev/null || handle_error "kubectl could not be found. Exiting..."
+    command -v aws &> /dev/null || handle_error "AWS CLI could not be found. Exiting..."
+
+    # Attempt to get Karpenter NodePools
+    nodepools=$(kubectl get nodepools -o jsonpath='{.items[*].metadata.name}') || handle_error "Failed to get nodepools"
+
+    # Replace the template values with appropriate ones from the cluster
+    SLACK_PAYLOAD=$(echo "$SLACK_PAYLOAD" | sed "s/TEMPLATE_CLUSTER/${CLUSTER_NAME}/; s/TEMPLATE_SCALING_DIRECTION/${SCALING_DIRECTION}/; s/TEMPLATE_DTG/$(date)/")
+
+    #################################
+    # SCALE DOWN
+    #################################
+
+    # If scaling down and there are nodepools, patch them to set cpu limits to 0
+    if [ "$SCALING_DIRECTION" == "down" ] && [ -n "$nodepools" ]; then
+
+      echo "[INFO] Cluster SCALE DOWN initiated"
+      echo "[INFO] Patching Karpenter NodePools..."
+
+      for nodepool in $nodepools; do
+          if ! kubectl patch nodepool $nodepool --type merge --patch '{"spec": {"limits":{"cpu": "0"}}}'; then
+            handle_error "Failed to patch nodepool $nodepool"
+          fi
+      done
+
+      # Retrieve Karpenter provisioned nodes
+      if karpenter_provisioned_nodes=$(kubectl get nodes -l karpenter.sh/initialized=true -o jsonpath='{.items[*].metadata.name}'); then
+          if [ -z "$karpenter_provisioned_nodes" ]; then
+              echo "[INFO] No Karpenter provisioned nodes found. Exiting..."
+              exit 0
+          else
+              echo "[INFO] Getting Karpenter provisioned nodes..."
+              echo $karpenter_provisioned_nodes
+          fi
+      else
+        handle_error "Failed to get Karpenter provisioned nodes"
+      fi
+
+      # For each node, get the ec2 instance id and terminate the instance
+      for node in $karpenter_provisioned_nodes; do
+
+        # Get the ec2 instance id based of the node name
+        if ec2_instance_id=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=$node" --query "Reservations[].Instances[].InstanceId" --output text); then
+          echo "[INFO] Terminating $node..."
+
+          # Terminate the instance
+          if aws ec2 terminate-instances --instance-ids $ec2_instance_id; then
+            echo "[INFO] >> $ec2_instance_id terminated"
+          else
+            handle_error "Failed to terminate instance $ec2_instance_id"
+          fi
+        else
+          handle_error "Failed to get EC2 instance id"
+        fi
+      done
+
+      echo "[INFO] Cluster scaled down at $(date)"
+      exit 0
+
+    #################################
+    # SCALE UP
+    #################################
+
+    # If scaling up and there are nodepools, patch them to remove cpu limits
+    elif [ "$SCALING_DIRECTION" == "up" ] && [ -n "$nodepools" ]; then
+
+      echo "[INFO] Cluster SCALE UP initiated"
+      echo "[INFO] Patching Karpenter NodePools..."
+
+      for nodepool in $nodepools; do
+          if ! kubectl patch nodepool $nodepool --type merge --patch '{"spec": {"limits": null}}'; then
+            handle_error "Failed to patch NodePool: $nodepool"
+          fi
+      done
+      echo "[INFO] Cluster scaled up at $(date)"
+      exit 0
+    else
+      handle_error "Invalid scaling direction"
+    fi
